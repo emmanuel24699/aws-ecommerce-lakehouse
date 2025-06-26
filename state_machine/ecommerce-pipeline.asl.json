@@ -1,0 +1,277 @@
+{
+  "Comment": "E-Commerce ETL pipeline.",
+  "StartAt": "Run_ETL_Jobs_In_Parallel",
+  "States": {
+    "Run_ETL_Jobs_In_Parallel": {
+      "Type": "Parallel",
+      "Next": "ETL_Completion_Check",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "ETL_Failed_Notification"
+        }
+      ],
+      "Branches": [
+        {
+          "StartAt": "Process_Products_Job",
+          "States": {
+            "Process_Products_Job": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "process-products-job",
+                "Timeout": 3600,
+                "Arguments": {
+                  "--S3_INPUT_PATH": "s3://lab5-ecommerce-lakehouse/raw/products.csv",
+                  "--S3_PROCESSED_ZONE": "s3://lab5-ecommerce-lakehouse/processed/",
+                  "--S3_REJECTED_PATH": "s3://lab5-ecommerce-lakehouse/rejected/products/",
+                  "--datalake-formats": "delta"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Process_Orders_Job",
+          "States": {
+            "Process_Orders_Job": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "process-orders-job",
+                "Timeout": 3600,
+                "Arguments": {
+                  "--S3_INPUT_PATH": "s3://lab5-ecommerce-lakehouse/raw/orders_apr_2025.xlsx",
+                  "--S3_PROCESSED_ZONE": "s3://lab5-ecommerce-lakehouse/processed/",
+                  "--S3_REJECTED_PATH": "s3://lab5-ecommerce-lakehouse/rejected/orders/",
+                  "--datalake-formats": "delta"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Process_Order_Items_Job",
+          "States": {
+            "Process_Order_Items_Job": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "process-order-items-job",
+                "Timeout": 3600,
+                "Arguments": {
+                  "--S3_INPUT_PATH": "s3://lab5-ecommerce-lakehouse/raw/order_items_apr_2025.xlsx",
+                  "--S3_PROCESSED_ZONE": "s3://lab5-ecommerce-lakehouse/processed/",
+                  "--S3_REJECTED_PATH": "s3://lab5-ecommerce-lakehouse/rejected/order_items/",
+                  "--datalake-formats": "delta"
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ]
+    },
+    "ETL_Completion_Check": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Or": [
+            {
+              "Variable": "$[0].Error",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$[1].Error",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$[2].Error",
+              "IsPresent": true
+            }
+          ],
+          "Next": "ETL_Failed_Notification"
+        }
+      ],
+      "Default": "Archive_Raw_Files"
+    },
+    "Archive_Raw_Files": {
+      "Type": "Parallel",
+      "Next": "Delete_Raw_Files",
+      "Branches": [
+        {
+          "StartAt": "Archive_Products",
+          "States": {
+            "Archive_Products": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:s3:copyObject",
+              "Parameters": {
+                "Bucket": "lab5-ecommerce-lakehouse",
+                "CopySource": "lab5-ecommerce-lakehouse/raw/products.csv",
+                "Key": "archived/raw/products.csv"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Archive_Orders",
+          "States": {
+            "Archive_Orders": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:s3:copyObject",
+              "Parameters": {
+                "Bucket": "lab5-ecommerce-lakehouse",
+                "CopySource": "lab5-ecommerce-lakehouse/raw/orders_apr_2025.xlsx",
+                "Key": "archived/raw/orders_apr_2025.xlsx"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Archive_Order_Items",
+          "States": {
+            "Archive_Order_Items": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:s3:copyObject",
+              "Parameters": {
+                "Bucket": "lab5-ecommerce-lakehouse",
+                "CopySource": "lab5-ecommerce-lakehouse/raw/order_items_apr_2025.xlsx",
+                "Key": "archived/raw/order_items_apr_2025.xlsx"
+              },
+              "End": true
+            }
+          }
+        }
+      ]
+    },
+    "Delete_Raw_Files": {
+      "Type": "Parallel",
+      "Next": "Start_Glue_Crawler",
+      "Branches": [
+        {
+          "StartAt": "Delete_Products",
+          "States": {
+            "Delete_Products": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:s3:deleteObject",
+              "Parameters": {
+                "Bucket": "lab5-ecommerce-lakehouse",
+                "Key": "raw/products.csv"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Delete_Orders",
+          "States": {
+            "Delete_Orders": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:s3:deleteObject",
+              "Parameters": {
+                "Bucket": "lab5-ecommerce-lakehouse",
+                "Key": "raw/orders_apr_2025.xlsx"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Delete_Order_Items",
+          "States": {
+            "Delete_Order_Items": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:s3:deleteObject",
+              "Parameters": {
+                "Bucket": "lab5-ecommerce-lakehouse",
+                "Key": "raw/order_items_apr_2025.xlsx"
+              },
+              "End": true
+            }
+          }
+        }
+      ]
+    },
+    "Start_Glue_Crawler": {
+      "Comment": "Start the Glue Crawler asynchronously.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+      "Parameters": {
+        "Name": "ecommerce-lakehouse-crawler"
+      },
+      "Next": "Wait_For_Crawler"
+    },
+    "Wait_For_Crawler": {
+      "Type": "Wait",
+      "Seconds": 15,
+      "Next": "Get_Crawler_Status"
+    },
+    "Get_Crawler_Status": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:glue:getCrawler",
+      "Parameters": {
+        "Name": "ecommerce-lakehouse-crawler"
+      },
+      "ResultPath": "$.CrawlerStatus",
+      "Next": "Is_Crawler_Ready?"
+    },
+    "Is_Crawler_Ready?": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.CrawlerStatus.Crawler.State",
+          "StringEquals": "RUNNING",
+          "Next": "Wait_For_Crawler"
+        },
+        {
+          "Variable": "$.CrawlerStatus.Crawler.State",
+          "StringEquals": "STOPPING",
+          "Next": "Wait_For_Crawler"
+        }
+      ],
+      "Default": "Validate_Data_with_Athena"
+    },
+    "Validate_Data_with_Athena": {
+      "Comment": "Run a simple Athena query to validate data presence.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString": "SELECT count(*) as product_count FROM \"ecommerce_db\".\"products\";",
+        "WorkGroup": "primary",
+        "ResultConfiguration": {
+          "OutputLocation": "s3://lab5-ecommerce-lakehouse/athena-query-results/"
+        }
+      },
+      "Next": "ETL_Succeeded_Notification"
+    },
+    "ETL_Failed_Notification": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:353654036829:ecommerce-pipeline-failures",
+        "Subject": "E-Commerce ETL Pipeline FAILED",
+        "Message.$": "States.JsonToString($)"
+      },
+      "Next": "Pipeline_Failed_State"
+    },
+    "Pipeline_Failed_State": {
+      "Type": "Fail",
+      "Cause": "An ETL job or a subsequent step failed.",
+      "Error": "PipelineFailure"
+    },
+    "ETL_Succeeded_Notification": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:353654036829:ecommerce-pipeline-success",
+        "Subject": "E-Commerce ETL Pipeline SUCCEEDED",
+        "Message": "All ETL jobs, archival, and validation steps completed successfully."
+      },
+      "End": true
+    }
+  }
+}
