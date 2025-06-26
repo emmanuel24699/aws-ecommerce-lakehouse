@@ -101,3 +101,24 @@ updates_df = valid_records_df.select(
     col("total_amount").cast("double"),
     col("date").cast("date"),
 )
+
+# 6. Write data to Delta table using MERGE (Upsert) logic
+print(
+    f"Merging {updates_df.count()} valid records into Delta table at {orders_delta_path}"
+)
+
+try:
+    delta_table = DeltaTable.forPath(spark, orders_delta_path)
+    delta_table.alias("target").merge(
+        updates_df.alias("source"), "target.order_id = source.order_id"
+    ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+    print("Merge operation successful.")
+except Exception as e:
+    # If the Delta table doesn't exist yet, create it
+    if "is not a Delta table" in str(e):
+        print("Delta table not found. Creating a new one.")
+        updates_df.write.format("delta").partitionBy("date").mode("overwrite").save(
+            orders_delta_path
+        )
+    else:
+        raise e
