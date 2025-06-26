@@ -12,6 +12,7 @@ from pyspark.sql.functions import col, lit, to_timestamp
 from delta.tables import DeltaTable
 
 # --- Initializations ---
+
 args = getResolvedOptions(
     sys.argv, ["JOB_NAME", "S3_INPUT_PATH", "S3_PROCESSED_ZONE", "S3_REJECTED_PATH"]
 )
@@ -24,9 +25,15 @@ job.init(args["JOB_NAME"], args)
 
 # --- Script Parameters ---
 
-s3_input_path = args["S3_INPUT_PATH"]
-s3_processed_zone = args["S3_PROCESSED_ZONE"]
-s3_rejected_path = args["S3_REJECTED_PATH"]
+s3_input_path = args[
+    "S3_INPUT_PATH"
+]  # "s3://lab5-ecommerce-lakehouse/raw/orders-apr_2025.xlsx"
+s3_processed_zone = args[
+    "S3_PROCESSED_ZONE"
+]  # "s3://lab5-ecommerce-lakehouse/processed/"
+s3_rejected_path = args[
+    "S3_REJECTED_PATH"
+]  # "s3://lab5-ecommerce-lakehouse/rejected/orders/"
 
 orders_delta_path = f"{s3_processed_zone}orders/"
 
@@ -49,9 +56,11 @@ def read_excel_from_s3(spark_session: SparkSession, file_path: str) -> "DataFram
     sheet_dfs = []
     for sheet_name in excel_file.sheet_names:
         pandas_df = pd.read_excel(excel_file, sheet_name=sheet_name)
+        # Convert pandas DataFrame to Spark DataFrame, ensuring schema consistency
         spark_df = spark_session.createDataFrame(pandas_df.astype(str))
         sheet_dfs.append(spark_df)
 
+    # Combine all sheets into one DataFrame
     if not sheet_dfs:
         return spark_session.createDataFrame(
             [], schema=...
@@ -93,6 +102,7 @@ if rejected_records_df.count() > 0:
     ).write.mode("append").format("json").save(s3_rejected_path)
 
 # 5. Transform and cleanse data
+# Convert timestamps and ensure correct data types
 updates_df = valid_records_df.select(
     col("order_num").cast("int"),
     col("order_id").cast("string"),
@@ -103,6 +113,7 @@ updates_df = valid_records_df.select(
 )
 
 # 6. Write data to Delta table using MERGE (Upsert) logic
+# This handles both new records and updates to existing ones.
 print(
     f"Merging {updates_df.count()} valid records into Delta table at {orders_delta_path}"
 )
@@ -122,3 +133,6 @@ except Exception as e:
         )
     else:
         raise e
+
+job.commit()
+print("Orders processing job finished successfully.")
