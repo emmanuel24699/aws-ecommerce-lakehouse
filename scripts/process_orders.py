@@ -91,3 +91,13 @@ if rejected_records_df.count() > 0:
     rejected_records_df.withColumn(
         "rejection_reason", lit("order_id is null")
     ).write.mode("append").format("json").save(s3_rejected_path)
+
+# 5. Transform and cleanse data
+updates_df = valid_records_df.select(
+    col("order_num").cast("int"),
+    col("order_id").cast("string"),
+    col("user_id").cast("string"),
+    to_timestamp(col("order_timestamp")).alias("order_timestamp"),
+    col("total_amount").cast("double"),
+    col("date").cast("date"),
+)
