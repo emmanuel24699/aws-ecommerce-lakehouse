@@ -82,3 +82,12 @@ valid_records_df = deduplicated_df.filter(
 rejected_records_df = deduplicated_df.filter(
     col("order_id").isNull() | (col("order_id") == "")
 )
+
+# 4. Log rejected records
+if rejected_records_df.count() > 0:
+    print(
+        f"Found {rejected_records_df.count()} rejected records. Writing to {s3_rejected_path}"
+    )
+    rejected_records_df.withColumn(
+        "rejection_reason", lit("order_id is null")
+    ).write.mode("append").format("json").save(s3_rejected_path)
