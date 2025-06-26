@@ -1,1 +1,34 @@
--
+name: Deploy Lakehouse Pipeline to AWS
+
+on:
+  push:
+    branches:
+      - main
+
+    paths:
+      - "scripts/**"
+      - ".state_machine/**"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Deploy scripts to S3
+        run: |
+          echo "Synching ETL scripts to S3..."
+          aws s3 sync ./scripts/ s3://lab5-ecommerce-lakehouse/scripts/ --delete
+
+      - name: "Deploy Step Functions State Machine"
+        run: |
+          echo "Updating State Machine definitions..."
+          aws stepfunctions update-state-machine --state-machine-arn ${{ vars.STATE_MACHINE_ARN }} --definition "file://state_machine/ecommerce-pipeline.asl.json"
