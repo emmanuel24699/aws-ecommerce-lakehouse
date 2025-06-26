@@ -33,3 +33,11 @@ s3_rejected_path = args[
 ]  # "s3://lab5-ecommerce-lakehouse/rejected/products/"
 
 products_delta_path = f"{s3_processed_zone}products/"
+
+
+# 1. Read the raw CSV data from S3
+try:
+    source_df = spark.read.format("csv").option("header", "true").load(s3_input_path)
+except Exception as e:
+    print(f"Error reading source file from {s3_input_path}. Job failed.")
+    raise e
