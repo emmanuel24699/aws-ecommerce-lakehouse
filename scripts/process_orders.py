@@ -62,3 +62,10 @@ def read_excel_from_s3(spark_session: SparkSession, file_path: str) -> "DataFram
         combined_df = combined_df.union(sheet_dfs[i])
 
     return combined_df
+
+
+# --- Main ETL Logic ---
+
+# 1. Read source data using the helper function
+source_df = read_excel_from_s3(spark, s3_input_path)
+print(f"Read {source_df.count()} total records from all sheets.")
