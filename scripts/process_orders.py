@@ -69,3 +69,7 @@ def read_excel_from_s3(spark_session: SparkSession, file_path: str) -> "DataFram
 # 1. Read source data using the helper function
 source_df = read_excel_from_s3(spark, s3_input_path)
 print(f"Read {source_df.count()} total records from all sheets.")
+
+# 2. Deduplicate data based on the unique order identifier
+deduplicated_df = source_df.dropDuplicates(["order_id"])
+print(f"Found {deduplicated_df.count()} records after deduplication.")
