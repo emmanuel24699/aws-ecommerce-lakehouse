@@ -61,3 +61,11 @@ if rejected_records_df.count() > 0:
     rejected_records_df.withColumn(
         "rejection_reason", lit("product_id is null")
     ).write.mode("append").format("json").save(s3_rejected_path)
+
+# 4. Transform the data
+updates_df = valid_records_df.select(
+    col("product_id").cast(StringType()),
+    col("department_id").cast(StringType()),
+    col("department").cast(StringType()),
+    col("product_name").cast(StringType()),
+).dropDuplicates(["product_id"])
