@@ -9,6 +9,7 @@ from pyspark.sql.types import StringType
 from delta.tables import DeltaTable
 from pyspark.sql.functions import col, lit
 from pyspark.sql.types import StringType
+from delta.tables import DeltaTable
 
 # --- Initializations ---
 
@@ -69,3 +70,22 @@ updates_df = valid_records_df.select(
     col("department").cast(StringType()),
     col("product_name").cast(StringType()),
 ).dropDuplicates(["product_id"])
+
+# 5. Write data to Delta table using MERGE (Upsert) logic
+print(
+    f"Merging {updates_df.count()} valid records into Delta table at {products_delta_path}"
+)
+try:
+    delta_table = DeltaTable.forPath(spark, products_delta_path)
+    delta_table.alias("target").merge(
+        updates_df.alias("source"),
+        "target.product_id = source.product_id",
+    ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+    print("Merge operation successful.")
+except Exception as e:
+    # If the Delta table doesn't exist yet (first run), create it
+    if "is not a Delta table" in str(e) or "Path does not exist" in str(e):
+        print("Delta table not found. Creating a new one.")
+        updates_df.write.format("delta").mode("overwrite").save(products_delta_path)
+    else:
+        raise e
