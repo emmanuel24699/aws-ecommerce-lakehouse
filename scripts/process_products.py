@@ -7,6 +7,8 @@ from awsglue.job import Job
 from pyspark.sql.functions import col, lit
 from pyspark.sql.types import StringType
 from delta.tables import DeltaTable
+from pyspark.sql.functions import col, lit
+from pyspark.sql.types import StringType
 
 # --- Initializations ---
 
@@ -41,3 +43,21 @@ try:
 except Exception as e:
     print(f"Error reading source file from {s3_input_path}. Job failed.")
     raise e
+
+# 2. Validation: Ensure primary identifier is not null
+source_df.cache()
+valid_records_df = source_df.filter(
+    col("product_id").isNotNull() & (col("product_id") != "")
+)
+rejected_records_df = source_df.filter(
+    col("product_id").isNull() | (col("product_id") == "")
+)
+
+# 3. Log rejected records if any exist
+if rejected_records_df.count() > 0:
+    print(
+        f"Found {rejected_records_df.count()} rejected records. Writing to {s3_rejected_path}"
+    )
+    rejected_records_df.withColumn(
+        "rejection_reason", lit("product_id is null")
+    ).write.mode("append").format("json").save(s3_rejected_path)
