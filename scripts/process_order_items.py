@@ -88,3 +88,26 @@ updates_df = valid_records_df.select(
     to_timestamp(col("order_timestamp")).alias("order_timestamp"),
     col("date").cast("date"),
 )
+
+# 6. Write data to Delta table using MERGE logic
+print(
+    f"Merging {updates_df.count()} valid records into Delta table at {order_items_delta_path}"
+)
+try:
+    delta_table = DeltaTable.forPath(spark, order_items_delta_path)
+    delta_table.alias("target").merge(
+        updates_df.alias("source"),
+        "target.id = source.id",
+    ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+    print("Merge operation successful.")
+except Exception as e:
+    if "is not a Delta table" in str(e):
+        print("Delta table not found. Creating a new one.")
+        updates_df.write.format("delta").partitionBy("date").mode("overwrite").save(
+            order_items_delta_path
+        )
+    else:
+        raise e
+
+job.commit()
+print("Order Items processing job finished successfully.")
