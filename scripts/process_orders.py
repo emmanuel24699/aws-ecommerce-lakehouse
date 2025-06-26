@@ -21,3 +21,11 @@ glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args["JOB_NAME"], args)
+
+# --- Script Parameters ---
+
+s3_input_path = args["S3_INPUT_PATH"]
+s3_processed_zone = args["S3_PROCESSED_ZONE"]
+s3_rejected_path = args["S3_REJECTED_PATH"]
+
+orders_delta_path = f"{s3_processed_zone}orders/"
