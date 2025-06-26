@@ -7,9 +7,6 @@ from awsglue.job import Job
 from pyspark.sql.functions import col, lit
 from pyspark.sql.types import StringType
 from delta.tables import DeltaTable
-from pyspark.sql.functions import col, lit
-from pyspark.sql.types import StringType
-from delta.tables import DeltaTable
 
 # --- Initializations ---
 
@@ -71,6 +68,7 @@ updates_df = valid_records_df.select(
     col("product_name").cast(StringType()),
 ).dropDuplicates(["product_id"])
 
+
 # 5. Write data to Delta table using MERGE (Upsert) logic
 print(
     f"Merging {updates_df.count()} valid records into Delta table at {products_delta_path}"
@@ -79,7 +77,7 @@ try:
     delta_table = DeltaTable.forPath(spark, products_delta_path)
     delta_table.alias("target").merge(
         updates_df.alias("source"),
-        "target.product_id = source.product_id",
+        "target.product_id = source.product_id",  # Merge based on the product ID
     ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
     print("Merge operation successful.")
 except Exception as e:
@@ -89,3 +87,6 @@ except Exception as e:
         updates_df.write.format("delta").mode("overwrite").save(products_delta_path)
     else:
         raise e
+
+job.commit()
+print("Product processing job finished successfully.")
