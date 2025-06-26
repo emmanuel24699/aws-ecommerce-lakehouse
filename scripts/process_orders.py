@@ -73,3 +73,12 @@ print(f"Read {source_df.count()} total records from all sheets.")
 # 2. Deduplicate data based on the unique order identifier
 deduplicated_df = source_df.dropDuplicates(["order_id"])
 print(f"Found {deduplicated_df.count()} records after deduplication.")
+
+# 3. Validation: Ensure primary identifier is not null
+deduplicated_df.cache()
+valid_records_df = deduplicated_df.filter(
+    col("order_id").isNotNull() & (col("order_id") != "")
+)
+rejected_records_df = deduplicated_df.filter(
+    col("order_id").isNull() | (col("order_id") == "")
+)
