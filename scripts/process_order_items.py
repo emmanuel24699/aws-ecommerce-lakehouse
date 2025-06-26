@@ -55,3 +55,12 @@ def read_excel_from_s3(spark_session: SparkSession, file_path: str) -> "DataFram
     for i in range(1, len(sheet_dfs)):
         combined_df = combined_df.union(sheet_dfs[i])
     return combined_df
+
+
+# --- Main ETL Logic ---
+
+# 1. Read source data
+source_df = read_excel_from_s3(spark, s3_input_path)
+
+# 2. Deduplicate data based on the unique line item identifier
+deduplicated_df = source_df.dropDuplicates(["id"])
