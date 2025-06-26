@@ -64,3 +64,14 @@ source_df = read_excel_from_s3(spark, s3_input_path)
 
 # 2. Deduplicate data based on the unique line item identifier
 deduplicated_df = source_df.dropDuplicates(["id"])
+
+# 3. Validation: Ensure primary identifier is not null
+deduplicated_df.cache()
+valid_records_df = deduplicated_df.filter(col("id").isNotNull() & (col("id") != ""))
+rejected_records_df = deduplicated_df.filter(col("id").isNull() | (col("id") == ""))
+
+# 4. Log rejected records
+if rejected_records_df.count() > 0:
+    rejected_records_df.withColumn("rejection_reason", lit("id is null")).write.mode(
+        "append"
+    ).format("json").save(s3_rejected_path)
