@@ -51,7 +51,7 @@ rejected_records_df = source_df.filter(
     col("product_id").isNull() | (col("product_id") == "")
 )
 
-# 3. Log rejected records if any exist
+# 3. Log rejected records if any exists
 if rejected_records_df.count() > 0:
     print(
         f"Found {rejected_records_df.count()} rejected records. Writing to {s3_rejected_path}"
