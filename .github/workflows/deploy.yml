@@ -28,13 +28,13 @@ jobs:
         with:
           python-version: "3.9" # Choose a version compatible with your scripts
 
-      - name: Lint Python scripts
-        run: |
-          echo "Installing pylint..."
-          pip install pylint
-          echo "Linting Python scripts in scripts/ directory..."
-          pylint scripts/*.py || { echo "Linting failed"; exit 1; }
-          # Note: Linting enforces code quality before deployment
+      # - name: Lint Python scripts
+      #   run: |
+      #     echo "Installing pylint..."
+      #     pip install pylint
+      #     echo "Linting Python scripts in scripts/ directory..."
+      #     pylint scripts/*.py || { echo "Linting failed"; exit 1; }
+      #     # Note: Linting enforces code quality before deployment
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4

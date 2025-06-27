@@ -22,16 +22,9 @@ job.init(args["JOB_NAME"], args)
 
 # --- Script Parameters ---
 
-s3_input_path = args[
-    "S3_INPUT_PATH"
-]  # "s3://lab5-ecommerce-lakehouse/raw/products.csv"
-s3_processed_zone = args[
-    "S3_PROCESSED_ZONE"
-]  # "s3://lab5-ecommerce-lakehouse/processed/"
-s3_rejected_path = args[
-    "S3_REJECTED_PATH"
-]  # "s3://lab5-ecommerce-lakehouse/rejected/products/"
-
+s3_input_path = args["S3_INPUT_PATH"]
+s3_processed_zone = args["S3_PROCESSED_ZONE"]
+s3_rejected_path = args["S3_REJECTED_PATH"]
 products_delta_path = f"{s3_processed_zone}products/"
 
 
