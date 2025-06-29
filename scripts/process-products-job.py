@@ -123,3 +123,4 @@ finally:
     logger.info("Attempting to upload log file to S3.")
     s3_bucket = "lab5-ecommerce-lakehouse"
     upload_log_to_s3(log_file_path, s3_bucket, args["JOB_NAME"])
+    logger.info("Log file uploaded successfully.")
