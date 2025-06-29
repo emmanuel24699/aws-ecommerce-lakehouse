@@ -1,113 +1,144 @@
 import sys
+import logging
 import boto3
 import pandas as pd
 from io import BytesIO
-from awsglue.transforms import *
+from datetime import datetime
 from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, lit, to_timestamp
 from delta.tables import DeltaTable
 
-# --- Initializations ---
 
-args = getResolvedOptions(
-    sys.argv, ["JOB_NAME", "S3_INPUT_PATH", "S3_PROCESSED_ZONE", "S3_REJECTED_PATH"]
-)
-
-sc = SparkContext()
-glueContext = GlueContext(sc)
-spark = glueContext.spark_session
-job = Job(glueContext)
-job.init(args["JOB_NAME"], args)
-
-# --- Script Parameters ---
-
-s3_input_path = args["S3_INPUT_PATH"]
-s3_processed_zone = args["S3_PROCESSED_ZONE"]
-s3_rejected_path = args["S3_REJECTED_PATH"]
-
-order_items_delta_path = f"{s3_processed_zone}order_items/"
+# --- Logger and S3 Upload Setup ---
+def setup_logger():
+    log_file_path = "/tmp/glue_etl_run.log"
+    logger = logging.getLogger("ETL_Logger")
+    logger.setLevel(logging.INFO)
+    handler = logging.FileHandler(log_file_path)
+    handler.setLevel(logging.INFO)
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    handler.setFormatter(formatter)
+    if not logger.handlers:
+        logger.addHandler(handler)
+    return logger, log_file_path
 
 
-# --- Helper Function to Read Multi-Sheet Excel from S3 ---
-def read_excel_from_s3(spark_session: SparkSession, file_path: str) -> "DataFrame":
-    s3_client = boto3.client("s3")
-    bucket = file_path.split("/")[2]
-    key = "/".join(file_path.split("/")[3:])
+def upload_log_to_s3(local_path, s3_bucket, job_name):
     try:
+        s3_client = boto3.client("s3")
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        s3_key = f"logs/{job_name}/{timestamp}.log"
+        s3_client.upload_file(local_path, s3_bucket, s3_key)
+        print(f"Successfully uploaded log to s3://{s3_bucket}/{s3_key}")
+    except Exception as e:
+        print(f"Failed to upload log to S3: {e}")
+
+
+# --- Main Script ---
+logger, log_file_path = setup_logger()
+
+try:
+    # --- Initializations ---
+    logger.info("Starting Order Items ETL Job")
+    args = getResolvedOptions(
+        sys.argv, ["JOB_NAME", "S3_INPUT_PATH", "S3_PROCESSED_ZONE", "S3_REJECTED_PATH"]
+    )
+    sc = SparkContext()
+    glueContext = GlueContext(sc)
+    spark = glueContext.spark_session
+    job = Job(glueContext)
+    job.init(args["JOB_NAME"], args)
+
+    # --- Parameters ---
+    s3_input_path = args["S3_INPUT_PATH"]
+    s3_processed_zone = args["S3_PROCESSED_ZONE"]
+    s3_rejected_path = args["S3_REJECTED_PATH"]
+    order_items_delta_path = f"{s3_processed_zone}order_items/"
+    logger.info(f"Input path: {s3_input_path}")
+
+    # --- Helper Function to Read Excel ---
+    def read_excel_from_s3(file_path):
+        logger.info(f"Reading Excel file from {file_path}")
+        s3_client = boto3.client("s3")
+        bucket = file_path.split("/")[2]
+        key = "/".join(file_path.split("/")[3:])
         s3_object = s3_client.get_object(Bucket=bucket, Key=key)
         excel_data = s3_object["Body"].read()
-        excel_file = pd.ExcelFile(BytesIO(excel_data))
-    except Exception as e:
-        print(f"Error reading Excel file from S3 path: {file_path}")
-        raise e
-    sheet_dfs = []
-    for sheet_name in excel_file.sheet_names:
-        pandas_df = pd.read_excel(excel_file, sheet_name=sheet_name, engine="openpyxl")
-        spark_df = spark_session.createDataFrame(pandas_df.astype(str))
-        sheet_dfs.append(spark_df)
-    if not sheet_dfs:
-        return spark_session.createDataFrame([], schema=...)
-    combined_df = sheet_dfs[0]
-    for i in range(1, len(sheet_dfs)):
-        combined_df = combined_df.union(sheet_dfs[i])
-    return combined_df
+        excel_file = pd.ExcelFile(BytesIO(excel_data), engine="openpyxl")
+        sheet_dfs = [
+            spark.createDataFrame(
+                pd.read_excel(excel_file, sheet_name=sheet).astype(str)
+            )
+            for sheet in excel_file.sheet_names
+        ]
+        if not sheet_dfs:
+            return spark.createDataFrame([], spark.schema)
+        combined_df = sheet_dfs[0]
+        for i in range(1, len(sheet_dfs)):
+            combined_df = combined_df.union(sheet_dfs[i])
+        return combined_df
 
+    # --- Main ETL Logic ---
+    source_df = read_excel_from_s3(s3_input_path)
+    logger.info(f"Read {source_df.count()} total records from all sheets.")
+    deduplicated_df = source_df.dropDuplicates(["id"])
 
-# --- Main ETL Logic ---
+    deduplicated_df.cache()
+    valid_records_df = deduplicated_df.filter(col("id").isNotNull() & (col("id") != ""))
+    rejected_records_df = deduplicated_df.filter(col("id").isNull() | (col("id") == ""))
 
-# 1. Read source data
-source_df = read_excel_from_s3(spark, s3_input_path)
+    rejected_count = rejected_records_df.count()
+    if rejected_count > 0:
+        logger.warning(
+            f"Found {rejected_count} rejected records. Writing to {s3_rejected_path}"
+        )
+        rejected_records_df.withColumn(
+            "rejection_reason", lit("id is null")
+        ).write.mode("append").format("json").save(s3_rejected_path)
 
-# 2. Deduplicate data based on the unique line item identifier
-deduplicated_df = source_df.dropDuplicates(["id"])
+    updates_df = valid_records_df.select(
+        col("id").cast("string"),
+        col("order_id").cast("string"),
+        col("user_id").cast("string"),
+        col("days_since_prior_order").cast("double"),
+        col("product_id").cast("string"),
+        col("add_to_cart_order").cast("int"),
+        col("reordered").cast("int"),
+        to_timestamp(col("order_timestamp")).alias("order_timestamp"),
+        col("date").cast("date"),
+    )
 
-# 3. Validation: Ensure primary identifier is not null
-deduplicated_df.cache()
-valid_records_df = deduplicated_df.filter(col("id").isNotNull() & (col("id") != ""))
-rejected_records_df = deduplicated_df.filter(col("id").isNull() | (col("id") == ""))
+    valid_count = updates_df.count()
+    logger.info(
+        f"Merging {valid_count} valid records into Delta table at {order_items_delta_path}"
+    )
 
-# 4. Log rejected records
-if rejected_records_df.count() > 0:
-    rejected_records_df.withColumn("rejection_reason", lit("id is null")).write.mode(
-        "append"
-    ).format("json").save(s3_rejected_path)
-
-# 5. Transform and cleanse data
-updates_df = valid_records_df.select(
-    col("id").cast("string"),
-    col("order_id").cast("string"),
-    col("user_id").cast("string"),
-    col("days_since_prior_order").cast("double"),
-    col("product_id").cast("string"),
-    col("add_to_cart_order").cast("int"),
-    col("reordered").cast("int"),
-    to_timestamp(col("order_timestamp")).alias("order_timestamp"),
-    col("date").cast("date"),
-)
-
-# 6. Write data to Delta table using MERGE logic
-print(
-    f"Merging {updates_df.count()} valid records into Delta table at {order_items_delta_path}"
-)
-try:
-    delta_table = DeltaTable.forPath(spark, order_items_delta_path)
-    delta_table.alias("target").merge(
-        updates_df.alias("source"),
-        "target.id = source.id",
-    ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
-    print("Merge operation successful.")
-except Exception as e:
-    if "is not a Delta table" in str(e):
-        print("Delta table not found. Creating a new one.")
+    if not DeltaTable.isDeltaTable(spark, order_items_delta_path):
+        logger.warning("Delta table not found. Creating a new one.")
         updates_df.write.format("delta").partitionBy("date").mode("overwrite").save(
             order_items_delta_path
         )
     else:
-        raise e
+        delta_table = DeltaTable.forPath(spark, order_items_delta_path)
+        delta_table.alias("target").merge(
+            updates_df.alias("source"), "target.id = source.id"
+        ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
 
-job.commit()
-print("Order Items processing job finished successfully.")
+    job.commit()
+    logger.info("Order Items ETL Job finished successfully.")
+
+except Exception as e:
+    logger.error(f"Job failed with error: {e}", exc_info=True)
+    raise e
+
+finally:
+    # --- Upload Log File ---
+    logger.info("Attempting to upload log file to S3.")
+    s3_bucket = "lab5-ecommerce-lakehouse"
+    upload_log_to_s3(log_file_path, s3_bucket, args["JOB_NAME"])
+    logger.info("Log file upload completed.")
