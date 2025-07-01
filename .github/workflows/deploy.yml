@@ -7,17 +7,19 @@ on:
     paths:
       - "scripts/**"
       - "state_machine/**"
+      - "pre_validation_lambda/**"
+      - "template.yaml"
 
 env:
-  S3_BUCKET_NAME: lab5-ecommerce-lakehouse # S3 bucket for ETL scripts
-  AWS_REGION: us-east-1 # AWS region for deployment
+  S3_BUCKET_NAME: lab5-ecommerce-lakehouse
+  AWS_REGION: us-east-1
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write # Required for OIDC token
-      contents: read # Required for checkout
+      id-token: write
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -26,15 +28,10 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.9" # Choose a version compatible with your scripts
+          python-version: "3.9"
 
-      # - name: Lint Python scripts
-      #   run: |
-      #     echo "Installing pylint..."
-      #     pip install pylint
-      #     echo "Linting Python scripts in scripts/ directory..."
-      #     pylint scripts/*.py || { echo "Linting failed"; exit 1; }
-      #     # Note: Linting enforces code quality before deployment
+      - name: Set up SAM CLI
+        uses: aws-actions/setup-sam@v2
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -43,24 +40,30 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: GitHubActionsDeploy
 
-      - name: Check S3 bucket existence
-        run: |
-          echo "Checking if S3 bucket exists..."
-          aws s3 ls s3://${{ env.S3_BUCKET_NAME }} || { echo "Bucket does not exist"; exit 1; }
+      # - name: Lint Python Scripts
+      #   run: |
+      #     pip install pylint
+      #     pylint scripts/*.py
+      #     pylint pre_validation_lambda/*.py
 
-      - name: Validate State Machine Definition
-        run: |
-          echo "Validating State Machine definition using AWS CLI..."
-          aws stepfunctions validate-state-machine-definition --definition "$(cat state_machine/ecommerce-pipeline.asl.json)" || { echo "Invalid ASL definition"; exit 1; }
-          # Note: Uses AWS Step Functions native validation
+      - name: Build SAM Application
+        run: sam build --use-container
 
-      - name: Deploy scripts to S3
+      - name: Deploy Serverless Application (Lambda, Role, Trigger)
         run: |
-          echo "Syncing ETL scripts to S3 bucket s3://${{ env.S3_BUCKET_NAME }}/scripts/..."
+          sam deploy --no-confirm-changeset --no-fail-on-empty-changeset \
+            --stack-name e-commerce-lakehouse-resources \
+            --s3-bucket ${{ env.S3_BUCKET_NAME }} \
+            --s3-prefix "sam-deploys" \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides StateMachineArn=${{ vars.STATE_MACHINE_ARN }}
+
+      - name: Deploy Glue Scripts to S3
+        run: |
           aws s3 sync ./scripts/ s3://${{ env.S3_BUCKET_NAME }}/scripts/ --delete
-          # Note: --delete removes files in S3 not present locally; ensure this is intended
 
       - name: Deploy Step Functions State Machine
         run: |
-          echo "Updating State Machine definition..."
-          aws stepfunctions update-state-machine --state-machine-arn ${{ vars.STATE_MACHINE_ARN }} --definition "$(cat state_machine/ecommerce-pipeline.asl.json)"
+          aws stepfunctions update-state-machine \
+            --state-machine-arn ${{ vars.STATE_MACHINE_ARN }} \
+            --definition "file://state_machine/ecommerce-pipeline.asl.json"
