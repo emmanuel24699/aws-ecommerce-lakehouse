@@ -8,14 +8,13 @@ from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
-from pyspark.sql.functions import col, lit, to_timestamp
+from pyspark.sql.functions import col, lit, to_timestamp, to_date
 from pyspark.sql.types import (
     StructType,
     StructField,
     StringType,
     IntegerType,
     DoubleType,
-    DateType,
 )
 from delta.tables import DeltaTable
 
@@ -75,11 +74,9 @@ try:
             StructField("order_num", IntegerType(), True),
             StructField("order_id", StringType(), True),
             StructField("user_id", StringType(), True),
-            StructField(
-                "order_timestamp", StringType(), True
-            ),  # Read as string, then parse
+            StructField("order_timestamp", StringType(), True),
             StructField("total_amount", DoubleType(), True),
-            StructField("date", DateType(), True),
+            StructField("date", StringType(), True),
         ]
     )
 
@@ -92,8 +89,6 @@ try:
         s3_object = s3_client.get_object(Bucket=bucket, Key=key)
         excel_data = s3_object["Body"].read()
         excel_file = pd.ExcelFile(BytesIO(excel_data), engine="openpyxl")
-
-        # Read all sheets into a single pandas DataFrame first
         all_sheets_df = pd.concat(
             [
                 pd.read_excel(excel_file, sheet_name=sheet)
@@ -101,8 +96,6 @@ try:
             ],
             ignore_index=True,
         )
-
-        # Create Spark DataFrame with the explicit schema
         return spark.createDataFrame(all_sheets_df, schema=schema)
 
     # --- Main ETL Logic ---
@@ -123,10 +116,10 @@ try:
             "rejection_reason", lit("order_id is null")
         ).write.mode("append").format("json").save(s3_rejected_path)
 
-    # Transform timestamp explicitly, other types are handled by the schema
+    # Explicitly convert the string columns to timestamp and date types
     updates_df = valid_records_df.withColumn(
         "order_timestamp", to_timestamp(col("order_timestamp"))
-    )
+    ).withColumn("date", to_date(col("date"), "yyyy-MM-dd"))
 
     valid_count = updates_df.count()
     logger.info(
