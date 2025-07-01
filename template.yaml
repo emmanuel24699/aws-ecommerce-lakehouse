@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Defines the serverless resources for the E-Commerce Lakehouse, including the pre-validation Lambda.
+
+Parameters:
+  StateMachineArn:
+    Type: String
+    Description: The ARN of the target Step Function state machine for the Lambda to trigger.
+
+Resources:
+  # This section defines the IAM Role that the Lambda function will use.
+  PreValidationLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PreValidationLambdaExecutionPolicyLab5
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowS3ReadAndReject
+                Effect: Allow
+                Action: [s3:*]
+                Resource: "arn:aws:s3:::lab5-ecommerce-lakehouse/*"
+              - Sid: AllowS3ListBucket
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: "arn:aws:s3:::lab5-ecommerce-lakehouse"
+              - Sid: AllowStepFunctionStartExecution
+                Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref StateMachineArn
+              - Sid: AllowCloudWatchLogging
+                Effect: Allow
+                Action:
+                  [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: "arn:aws:logs:*:*:*"
+
+  # This section defines the Lambda function itself.
+  PreValidationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: pre-validation-gatekeeper
+      CodeUri: pre_validation_lambda/
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.9
+      Role: !GetAtt PreValidationLambdaExecutionPolicy.Arn
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          STATE_MACHINE_ARN: !Ref StateMachineArn
+      Events:
+        S3Trigger:
+          Type: S3
+          Properties:
+            Bucket: lab5-ecommerce-lakehouse
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: raw/
+    Metadata:
+      # This tells SAM to use pip to install dependencies from requirements.txt
+      BuildMethod: python3.9
