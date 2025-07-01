@@ -1,157 +1,253 @@
 {
-  "Comment": "A dynamic ETL dispatcher pipeline that routes files to the correct Glue job based on S3 key.",
-  "StartAt": "Extract_File_Details",
-  "States": {
-    "Extract_File_Details": {
-      "Type": "Pass",
-      "Parameters": {
-        "s3_bucket.$": "$.detail.bucket.name",
-        "s3_key.$": "$.detail.object.key"
-      },
-      "ResultPath": "$.file_details",
-      "Next": "Route_File_Type"
-    },
-    "Route_File_Type": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.file_details.s3_key",
-          "StringMatches": "*/products/*",
-          "Next": "Run_Products_Job"
+    "Comment": "Final production-grade ETL Dispatcher with ResultPath on all tasks and catch blocks.",
+    "StartAt": "Extract_File_Details",
+    "States": {
+        "Extract_File_Details": {
+            "Type": "Pass",
+            "Parameters": {
+                "s3_bucket.$": "$.detail.bucket.name",
+                "s3_key.$": "$.detail.object.key"
+            },
+            "ResultPath": "$.file_details",
+            "Next": "Validate_File_Details"
         },
-        {
-          "Variable": "$.file_details.s3_key",
-          "StringMatches": "*/orders/*",
-          "Next": "Run_Orders_Job"
+        "Validate_File_Details": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "And": [
+                        {
+                            "Variable": "$.file_details.s3_bucket",
+                            "IsPresent": true
+                        },
+                        {
+                            "Variable": "$.file_details.s3_key",
+                            "IsPresent": true
+                        }
+                    ],
+                    "Next": "Route_File_Type"
+                }
+            ],
+            "Default": "Missing_File_Details_Failure"
         },
-        {
-          "Variable": "$.file_details.s3_key",
-          "StringMatches": "*/order-items/*",
-          "Next": "Run_Order_Items_Job"
+        "Route_File_Type": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Variable": "$.file_details.s3_key",
+                    "StringMatches": "*/products/*",
+                    "Next": "Run_Products_Job"
+                },
+                {
+                    "Variable": "$.file_details.s3_key",
+                    "StringMatches": "*/orders/*",
+                    "Next": "Run_Orders_Job"
+                },
+                {
+                    "Variable": "$.file_details.s3_key",
+                    "StringMatches": "*/order-items/*",
+                    "Next": "Run_Order_Items_Job"
+                }
+            ],
+            "Default": "Unknown_File_Type_Failure"
+        },
+        "Run_Products_Job": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Parameters": {
+                "JobName": "process-products-job",
+                "Arguments": {
+                    "--S3_INPUT_PATH.$": "States.Format('s3://{}/{}', $.file_details.s3_bucket, $.file_details.s3_key)",
+                    "--S3_PROCESSED_ZONE": "s3://lab5-ecommerce-lakehouse/processed/",
+                    "--S3_REJECTED_PATH": "s3://lab5-ecommerce-lakehouse/rejected/products/",
+                    "--datalake-formats": "delta"
+                }
+            },
+            "ResultPath": "$.glue_job_result",
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "Next": "ETL_Failed_Notification"
+                }
+            ],
+            "Next": "Archive_File"
+        },
+        "Run_Orders_Job": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Parameters": {
+                "JobName": "process-orders-job",
+                "Arguments": {
+                    "--S3_INPUT_PATH.$": "States.Format('s3://{}/{}', $.file_details.s3_bucket, $.file_details.s3_key)",
+                    "--S3_PROCESSED_ZONE": "s3://lab5-ecommerce-lakehouse/processed/",
+                    "--S3_REJECTED_PATH": "s3://lab5-ecommerce-lakehouse/rejected/orders/",
+                    "--datalake-formats": "delta"
+                }
+            },
+            "ResultPath": "$.glue_job_result",
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "Next": "ETL_Failed_Notification"
+                }
+            ],
+            "Next": "Archive_File"
+        },
+        "Run_Order_Items_Job": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::glue:startJobRun.sync",
+            "Parameters": {
+                "JobName": "process-order-items-job",
+                "Arguments": {
+                    "--S3_INPUT_PATH.$": "States.Format('s3://{}/{}', $.file_details.s3_bucket, $.file_details.s3_key)",
+                    "--S3_PROCESSED_ZONE": "s3://lab5-ecommerce-lakehouse/processed/",
+                    "--S3_REJECTED_PATH": "s3://lab5-ecommerce-lakehouse/rejected/order-items/",
+                    "--datalake-formats": "delta"
+                }
+            },
+            "ResultPath": "$.glue_job_result",
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "Next": "ETL_Failed_Notification"
+                }
+            ],
+            "Next": "Archive_File"
+        },
+        "Archive_File": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:s3:copyObject",
+            "Parameters": {
+                "Bucket.$": "$.file_details.s3_bucket",
+                "CopySource.$": "States.Format('{}/{}', $.file_details.s3_bucket, $.file_details.s3_key)",
+                "Key.$": "States.Format('archived/{}', $.file_details.s3_key)"
+            },
+            "ResultPath": null,
+            "Next": "Delete_Source_File"
+        },
+        "Delete_Source_File": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:s3:deleteObject",
+            "Parameters": {
+                "Bucket.$": "$.file_details.s3_bucket",
+                "Key.$": "$.file_details.s3_key"
+            },
+            "ResultPath": null,
+            "Next": "Start_Glue_Crawler"
+        },
+        "Start_Glue_Crawler": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+            "Parameters": {
+                "Name": "ecommerce-lakehouse-crawler"
+            },
+            "ResultPath": null,
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "Glue.CrawlerRunningException"
+                    ],
+                    "ResultPath": "$.crawler_start_error",
+                    "Next": "Wait_For_Crawler"
+                },
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "Next": "ETL_Failed_Notification"
+                }
+            ],
+            "Next": "Wait_For_Crawler"
+        },
+        "Wait_For_Crawler": {
+            "Type": "Wait",
+            "Seconds": 30,
+            "Next": "Get_Crawler_Status"
+        },
+        "Get_Crawler_Status": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:glue:getCrawler",
+            "Parameters": {
+                "Name": "ecommerce-lakehouse-crawler"
+            },
+            "ResultPath": "$.CrawlerStatus",
+            "Next": "Is_Crawler_Ready?"
+        },
+        "Is_Crawler_Ready?": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Variable": "$.CrawlerStatus.Crawler.State",
+                    "StringEquals": "RUNNING",
+                    "Next": "Wait_For_Crawler"
+                },
+                {
+                    "Variable": "$.CrawlerStatus.Crawler.State",
+                    "StringEquals": "STOPPING",
+                    "Next": "Wait_For_Crawler"
+                }
+            ],
+            "Default": "Validate_Data_with_Athena"
+        },
+        "Validate_Data_with_Athena": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+            "Parameters": {
+                "QueryString": "SELECT count(*) as record_count FROM \"ecommerce_db\".\"products\";",
+                "WorkGroup": "primary",
+                "ResultConfiguration": {
+                    "OutputLocation": "s3://lab5-ecommerce-lakehouse/athena-query-results/"
+                }
+            },
+            "ResultPath": "$.athena_validation_result",
+            "Catch": [
+                {
+                    "ErrorEquals": [
+                        "States.ALL"
+                    ],
+                    "Next": "ETL_Failed_Notification"
+                }
+            ],
+            "Next": "ETL_Succeeded_Notification"
+        },
+        "Missing_File_Details_Failure": {
+            "Type": "Fail",
+            "Cause": "Missing S3 bucket or key in the trigger event payload.",
+            "Error": "MissingFileDetailsError"
+        },
+        "Unknown_File_Type_Failure": {
+            "Type": "Fail",
+            "Cause": "The uploaded file was not in a recognized sub-folder (products, orders, or order-items).",
+            "Error": "InvalidFileTypeError"
+        },
+        "ETL_Failed_Notification": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sns:publish",
+            "Parameters": {
+                "TopicArn": "arn:aws:sns:us-east-1:353654036829:ecommerce-pipeline-failures",
+                "Subject": "E-Commerce ETL Pipeline FAILED",
+                "Message.$": "States.JsonToString($)"
+            },
+            "Next": "Pipeline_Failed_State"
+        },
+        "Pipeline_Failed_State": {
+            "Type": "Fail"
+        },
+        "ETL_Succeeded_Notification": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sns:publish",
+            "Parameters": {
+                "TopicArn": "arn:aws:sns:us-east-1:353654036829:ecommerce-pipeline-success",
+                "Subject": "E-Commerce ETL Pipeline SUCCEEDED",
+                "Message.$": "States.Format('Successfully processed file: s3://{}/{}', $.file_details.s3_bucket, $.file_details.s3_key)"
+            },
+            "End": true
         }
-      ],
-      "Default": "Unknown_File_Type_Failure"
-    },
-    "Run_Products_Job": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::glue:startJobRun.sync",
-      "Parameters": {
-        "JobName": "process-products-job",
-        "Arguments": {
-          "--S3_INPUT_PATH.$": "States.Format('s3://{}/{}', $.file_details.s3_bucket, $.file_details.s3_key)",
-          "--S3_PROCESSED_ZONE": "s3://lab5-ecommerce-lakehouse/processed/",
-          "--S3_REJECTED_PATH": "s3://lab5-ecommerce-lakehouse/rejected/products/",
-          "--datalake-formats": "delta"
-        }
-      },
-      "ResultPath": "$.glue_job_result",
-      "Catch": [
-        {
-          "ErrorEquals": ["States.ALL"],
-          "Next": "ETL_Failed_Notification"
-        }
-      ],
-      "Next": "Archive_File"
-    },
-    "Run_Orders_Job": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::glue:startJobRun.sync",
-      "Parameters": {
-        "JobName": "process-orders-job",
-        "Arguments": {
-          "--S3_INPUT_PATH.$": "States.Format('s3://{}/{}', $.file_details.s3_bucket, $.file_details.s3_key)",
-          "--S3_PROCESSED_ZONE": "s3://lab5-ecommerce-lakehouse/processed/",
-          "--S3_REJECTED_PATH": "s3://lab5-ecommerce-lakehouse/rejected/orders/",
-          "--datalake-formats": "delta"
-        }
-      },
-      "ResultPath": "$.glue_job_result",
-      "Catch": [
-        {
-          "ErrorEquals": ["States.ALL"],
-          "Next": "ETL_Failed_Notification"
-        }
-      ],
-      "Next": "Archive_File"
-    },
-    "Run_Order_Items_Job": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::glue:startJobRun.sync",
-      "Parameters": {
-        "JobName": "process-order-items-job",
-        "Arguments": {
-          "--S3_INPUT_PATH.$": "States.Format('s3://{}/{}', $.file_details.s3_bucket, $.file_details.s3_key)",
-          "--S3_PROCESSED_ZONE": "s3://lab5-ecommerce-lakehouse/processed/",
-          "--S3_REJECTED_PATH": "s3://lab5-ecommerce-lakehouse/rejected/order-items/",
-          "--datalake-formats": "delta"
-        }
-      },
-      "ResultPath": "$.glue_job_result",
-      "Catch": [
-        {
-          "ErrorEquals": ["States.ALL"],
-          "Next": "ETL_Failed_Notification"
-        }
-      ],
-      "Next": "Archive_File"
-    },
-    "Archive_File": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::aws-sdk:s3:copyObject",
-      "Parameters": {
-        "Bucket.$": "$.file_details.s3_bucket",
-        "CopySource.$": "States.Format('{}/{}', $.file_details.s3_bucket, $.file_details.s3_key)",
-        "Key.$": "States.Format('archived/{}', $.file_details.s3_key)"
-      },
-      "ResultPath": null,
-      "Next": "Delete_Source_File"
-    },
-    "Delete_Source_File": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::aws-sdk:s3:deleteObject",
-      "Parameters": {
-        "Bucket.$": "$.file_details.s3_bucket",
-        "Key.$": "$.file_details.s3_key"
-      },
-      "ResultPath": null,
-      "Next": "Run_Glue_Crawler"
-    },
-    "Run_Glue_Crawler": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
-      "Parameters": {
-        "Name": "ecommerce-lakehouse-crawler"
-      },
-      "ResultPath": null,
-      "Next": "ETL_Succeeded_Notification"
-    },
-    "ETL_Succeeded_Notification": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish",
-      "Parameters": {
-        "TopicArn": "arn:aws:sns:us-east-1:353654036829:ecommerce-pipeline-success",
-        "Subject": "E-Commerce ETL Pipeline SUCCEEDED",
-        "Message.$": "States.Format('Successfully processed file: s3://{}/{}', $.file_details.s3_bucket, $.file_details.s3_key)"
-      },
-      "End": true
-    },
-    "Unknown_File_Type_Failure": {
-      "Type": "Fail",
-      "Cause": "The uploaded file was not in a recognized sub-folder (products, orders, or order-items).",
-      "Error": "InvalidFileTypeError"
-    },
-    "ETL_Failed_Notification": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::sns:publish",
-      "Parameters": {
-        "TopicArn": "arn:aws:sns:us-east-1:353654036829:ecommerce-pipeline-failures",
-        "Subject": "E-Commerce ETL Pipeline FAILED",
-        "Message.$": "States.JsonToString($)"
-      },
-      "Next": "Pipeline_Failed_State"
-    },
-    "Pipeline_Failed_State": {
-      "Type": "Fail"
     }
-  }
 }
