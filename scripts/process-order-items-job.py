@@ -61,7 +61,7 @@ try:
     order_items_delta_path = f"{s3_processed_zone}order_items/"
     logger.info(f"Input path: {s3_input_path}")
 
-    # --- Helper Function to Read Excel ----
+    # --- Helper Function to Read Excel ---
     def read_excel_from_s3(file_path):
         logger.info(f"Reading Excel file from {file_path}")
         s3_client = boto3.client("s3")
