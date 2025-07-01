@@ -9,6 +9,14 @@ from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from pyspark.sql.functions import col, lit, to_timestamp
+from pyspark.sql.types import (
+    StructType,
+    StructField,
+    StringType,
+    IntegerType,
+    DoubleType,
+    DateType,
+)
 from delta.tables import DeltaTable
 
 
@@ -61,8 +69,25 @@ try:
     order_items_delta_path = f"{s3_processed_zone}order_items/"
     logger.info(f"Input path: {s3_input_path}")
 
+    # --- Define Explicit Schema ---
+    order_items_schema = StructType(
+        [
+            StructField("id", StringType(), True),
+            StructField("order_id", StringType(), True),
+            StructField("user_id", StringType(), True),
+            StructField("days_since_prior_order", DoubleType(), True),
+            StructField("product_id", StringType(), True),
+            StructField("add_to_cart_order", IntegerType(), True),
+            StructField("reordered", IntegerType(), True),
+            StructField(
+                "order_timestamp", StringType(), True
+            ),  # Read as string, then parse
+            StructField("date", DateType(), True),
+        ]
+    )
+
     # --- Helper Function to Read Excel ---
-    def read_excel_from_s3(file_path):
+    def read_excel_from_s3(file_path, schema):
         logger.info(f"Reading Excel file from {file_path}")
         s3_client = boto3.client("s3")
         bucket = file_path.split("/")[2]
@@ -70,27 +95,25 @@ try:
         s3_object = s3_client.get_object(Bucket=bucket, Key=key)
         excel_data = s3_object["Body"].read()
         excel_file = pd.ExcelFile(BytesIO(excel_data), engine="openpyxl")
-        sheet_dfs = [
-            spark.createDataFrame(
-                pd.read_excel(excel_file, sheet_name=sheet).astype(str)
-            )
-            for sheet in excel_file.sheet_names
-        ]
-        if not sheet_dfs:
-            return spark.createDataFrame([], spark.schema)
-        combined_df = sheet_dfs[0]
-        for i in range(1, len(sheet_dfs)):
-            combined_df = combined_df.union(sheet_dfs[i])
-        return combined_df
+
+        all_sheets_df = pd.concat(
+            [
+                pd.read_excel(excel_file, sheet_name=sheet)
+                for sheet in excel_file.sheet_names
+            ],
+            ignore_index=True,
+        )
+
+        return spark.createDataFrame(all_sheets_df, schema=schema)
 
     # --- Main ETL Logic ---
-    source_df = read_excel_from_s3(s3_input_path)
+    source_df = read_excel_from_s3(s3_input_path, order_items_schema)
     logger.info(f"Read {source_df.count()} total records from all sheets.")
     deduplicated_df = source_df.dropDuplicates(["id"])
 
     deduplicated_df.cache()
-    valid_records_df = deduplicated_df.filter(col("id").isNotNull() & (col("id") != ""))
-    rejected_records_df = deduplicated_df.filter(col("id").isNull() | (col("id") == ""))
+    valid_records_df = deduplicated_df.filter(col("id").isNotNull())
+    rejected_records_df = deduplicated_df.filter(col("id").isNull())
 
     rejected_count = rejected_records_df.count()
     if rejected_count > 0:
@@ -101,16 +124,8 @@ try:
             "rejection_reason", lit("id is null")
         ).write.mode("append").format("json").save(s3_rejected_path)
 
-    updates_df = valid_records_df.select(
-        col("id").cast("string"),
-        col("order_id").cast("string"),
-        col("user_id").cast("string"),
-        col("days_since_prior_order").cast("double"),
-        col("product_id").cast("string"),
-        col("add_to_cart_order").cast("int"),
-        col("reordered").cast("int"),
-        to_timestamp(col("order_timestamp")).alias("order_timestamp"),
-        col("date").cast("date"),
+    updates_df = valid_records_df.withColumn(
+        "order_timestamp", to_timestamp(col("order_timestamp"))
     )
 
     valid_count = updates_df.count()
@@ -137,8 +152,6 @@ except Exception as e:
     raise e
 
 finally:
-    # --- Upload Log File ---
     logger.info("Attempting to upload log file to S3.")
     s3_bucket = "lab5-ecommerce-lakehouse"
     upload_log_to_s3(log_file_path, s3_bucket, args["JOB_NAME"])
-    logger.info("Log file upload completed.")

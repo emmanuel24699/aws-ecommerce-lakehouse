@@ -7,36 +7,28 @@ from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from pyspark.sql.functions import col, lit
-from pyspark.sql.types import StringType
+from pyspark.sql.types import StructType, StructField, StringType
 from delta.tables import DeltaTable
 
 
 # --- Logger and S3 Upload Setup ---
+# ... (logging functions remain the same) ...
 def setup_logger():
-    """Sets up a logger to write to a local file."""
     log_file_path = "/tmp/glue_etl_run.log"
     logger = logging.getLogger("ETL_Logger")
     logger.setLevel(logging.INFO)
-
-    # Create file handler
     handler = logging.FileHandler(log_file_path)
     handler.setLevel(logging.INFO)
-
-    # Create formatter and add it to the handler
     formatter = logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
     handler.setFormatter(formatter)
-
-    # Add the handler to the logger
     if not logger.handlers:
         logger.addHandler(handler)
-
     return logger, log_file_path
 
 
 def upload_log_to_s3(local_path, s3_bucket, job_name):
-    """Uploads the local log file to a specified S3 path."""
     try:
         s3_client = boto3.client("s3")
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -69,9 +61,23 @@ try:
     products_delta_path = f"{s3_processed_zone}products/"
     logger.info(f"Input path: {s3_input_path}")
 
+    products_schema = StructType(
+        [
+            StructField("product_id", StringType(), True),
+            StructField("department_id", StringType(), True),
+            StructField("department", StringType(), True),
+            StructField("product_name", StringType(), True),
+        ]
+    )
+
     # --- Main ETL Logic ---
-    logger.info("Reading source CSV data from S3")
-    source_df = spark.read.format("csv").option("header", "true").load(s3_input_path)
+    logger.info("Reading source CSV data from S3 with explicit schema")
+    source_df = (
+        spark.read.format("csv")
+        .option("header", "true")
+        .schema(products_schema)
+        .load(s3_input_path)
+    )
 
     source_df.cache()
     valid_records_df = source_df.filter(
@@ -90,12 +96,8 @@ try:
             "rejection_reason", lit("product_id is null")
         ).write.mode("append").format("json").save(s3_rejected_path)
 
-    updates_df = valid_records_df.select(
-        col("product_id").cast(StringType()),
-        col("department_id").cast(StringType()),
-        col("department").cast(StringType()),
-        col("product_name").cast(StringType()),
-    ).dropDuplicates(["product_id"])
+    # No further casting is needed as the schema is already defined
+    updates_df = valid_records_df.dropDuplicates(["product_id"])
 
     valid_count = updates_df.count()
     logger.info(
@@ -115,12 +117,10 @@ try:
     logger.info("Product ETL Job finished successfully.")
 
 except Exception as e:
-    logger.error(f"Job failed with error: {e}")
+    logger.error(f"Job failed with error: {e}", exc_info=True)
     raise e
 
 finally:
-    # --- Upload Log File ---
     logger.info("Attempting to upload log file to S3.")
     s3_bucket = "lab5-ecommerce-lakehouse"
     upload_log_to_s3(log_file_path, s3_bucket, args["JOB_NAME"])
-    logger.info("Log file uploaded successfully.")
