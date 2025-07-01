@@ -74,7 +74,7 @@ try:
             StructField("id", StringType(), True),
             StructField("order_id", StringType(), True),
             StructField("user_id", StringType(), True),
-            StructField("days_since_prior_order", DoubleType(), True),
+            StructField("days_since_prior_order", StringType(), True),  # Read as string
             StructField("product_id", StringType(), True),
             StructField("add_to_cart_order", IntegerType(), True),
             StructField("reordered", IntegerType(), True),
@@ -119,10 +119,16 @@ try:
             "rejection_reason", lit("id is null")
         ).write.mode("append").format("json").save(s3_rejected_path)
 
-    # Explicitly convert the string columns to timestamp and date types
-    updates_df = valid_records_df.withColumn(
-        "order_timestamp", to_timestamp(col("order_timestamp"))
-    ).withColumn("date", to_date(col("date"), "yyyy-MM-dd"))
+    # Explicitly convert the string columns to their final, correct data types
+    updates_df = (
+        valid_records_df.withColumn(
+            "order_timestamp", to_timestamp(col("order_timestamp"))
+        )
+        .withColumn("date", to_date(col("date"), "yyyy-MM-dd"))
+        .withColumn(
+            "days_since_prior_order", col("days_since_prior_order").cast(DoubleType())
+        )
+    )
 
     valid_count = updates_df.count()
     logger.info(
